@@ -57,3 +57,7 @@
 [submodule "dhara/dhara"]
 	path = dhara/dhara
 	url = https://github.com/dlbeer/dhara.git
+
+[submodule "thorvg/thorvg"]
+	path = thorvg/thorvg
+	url = https://github.com/thorvg/thorvg
