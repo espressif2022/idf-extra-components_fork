@@ -1,6 +1,92 @@
-idf_component_register(
-    SRC_DIRS "./thorvg"
-    INCLUDE_DIRS "./thorvg"
+# Set a name for libthorvg library
+set(TVG_LIB libthorvg)
+set(TVG_INC_DIR thorvg/src/bindings/capi)
+set(TVG_SUBDIR "${CMAKE_CURRENT_SOURCE_DIR}/thorvg")
+set(TVG_BUILD_DIR "${CMAKE_BINARY_DIR}/thorvg_build")
+set(TVG_CROSS_CFG "${CMAKE_BINARY_DIR}/thorvg_build/cross_file.txt")
+
+idf_component_register(SRCS dummy.c
+                       INCLUDE_DIRS "${TVG_INC_DIR}")
+
+include(ExternalProject)
+
+if(NOT CMAKE_CXX_FLAGS STREQUAL "")
+    string(REGEX MATCHALL "-[^ ]+" match_list "${CMAKE_CXX_FLAGS}")
+    set(MESON_CXX_FLAGS "")
+
+    list(LENGTH match_list match_list_length)
+    math(EXPR last_index "${match_list_length}-1")
+
+    foreach(index RANGE ${last_index})
+        list(GET match_list ${index} match)
+        string(APPEND MESON_CXX_FLAGS "'${match}'")
+        if(NOT ${index} EQUAL ${last_index})
+            string(APPEND MESON_CXX_FLAGS ", ")
+        endif()
+    endforeach()
+else()
+    string(APPEND MESON_CXX_FLAGS "''")
+endif()
+
+if(NOT CMAKE_EXE_LINKER_FLAGS STREQUAL "")
+    string(REGEX MATCHALL "-[^ ]+" match_list "${CMAKE_EXE_LINKER_FLAGS}")
+    set(MESON_LINKER_FLAGS "")
+
+    list(LENGTH match_list match_list_length)
+    math(EXPR last_index "${match_list_length}-1")
+
+    foreach(index RANGE ${last_index})
+        list(GET match_list ${index} match)
+        string(APPEND MESON_LINKER_FLAGS "'${match}'")
+        if(NOT ${index} EQUAL ${last_index})
+            string(APPEND MESON_LINKER_FLAGS ", ")
+        endif()
+    endforeach()
+else()
+    string(APPEND MESON_LINKER_FLAGS "''")
+endif()
+
+string(LENGTH "${CMAKE_CXX_COMPILER}" path_length)
+math(EXPR extract_length "${path_length} - 3")
+string(SUBSTRING "${CMAKE_CXX_COMPILER}" 0 ${extract_length} TOOLCHAIN_PREFIX)
+
+file(WRITE ${TVG_CROSS_CFG} "
+[binaries]
+cpp = '${TOOLCHAIN_PREFIX}g++'
+ar = '${TOOLCHAIN_PREFIX}ar'
+as = '${TOOLCHAIN_PREFIX}as'
+ranlib = '${TOOLCHAIN_PREFIX}ranlib'
+ld = '${TOOLCHAIN_PREFIX}ld'
+strip = '${TOOLCHAIN_PREFIX}strip'
+
+[built-in options]
+cpp_args = ['-D_GNU_SOURCE','-D__linux__',${MESON_CXX_FLAGS}]
+# cpp_args = ['-D_GNU_SOURCE','-D__linux__']
+cpp_link_args = [${MESON_LINKER_FLAGS}]
+
+[host_machine]
+system = 'android'
+cpu_family = '${CMAKE_SYSTEM}'
+cpu = 'esp'
+endian = 'little'
+")
+
+ExternalProject_Add(${TVG_LIB}_target
+    PREFIX ${TVG_BUILD_DIR}
+    SOURCE_DIR ${TVG_SUBDIR}
+    BINARY_DIR ${TVG_BUILD_DIR}
+    CONFIGURE_COMMAND meson setup ${TVG_BUILD_DIR} ${TVG_SUBDIR}
+    --cross-file ${TVG_CROSS_CFG}
+    -Dbindings=capi
+    -Dextra=
+    -Ddefault_library=static
+    -Dthreads=false
+    BUILD_COMMAND ninja -C ${TVG_BUILD_DIR}
+    INSTALL_COMMAND ""
+    BUILD_BYPRODUCTS ${TVG_BUILD_DIR}/src/${TVG_LIB}.a
 )
 
-target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-dangling-pointer;-Wno-maybe-uninitialized;-fno-if-conversion;)
+add_prebuilt_library(${TVG_LIB} ${TVG_BUILD_DIR}/src/${TVG_LIB}.a PRIV_REQUIRES esp_rom)
+add_dependencies(${TVG_LIB} ${TVG_LIB}_target)
+
+target_link_libraries(${COMPONENT_LIB} INTERFACE ${TVG_LIB})

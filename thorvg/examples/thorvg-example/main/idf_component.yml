@@ -1,0 +1,4 @@
+dependencies:
+  espressif/thorvg:
+    version: "*"
+    override_path: "../../.."
