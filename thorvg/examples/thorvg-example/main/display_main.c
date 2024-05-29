@@ -11,67 +11,55 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_spiffs.h"
+#include "bsp/esp-bsp.h"
 #include "thorvg_capi.h"
 
 static const char *TAG = "example";
 
-static void init_filesystem(void);
-static void capi_shape_example(void);
-static void capi_lottie_example(void);
+static void capi_shape_example(bsp_lcd_handles_t *lcd_panel);
+static void capi_lottie_example(bsp_lcd_handles_t *lcd_panel);
+static void argb888_to_rgb565(const uint32_t *argb888, uint16_t *rgb565, size_t size);
 
 #define LOTTIE_SIZE_HOR     300
 #define LOTTIE_SIZE_VER     300
 
 void app_main(void)
 {
-    init_filesystem();
+    bsp_lcd_handles_t lcd_panel;
 
-    capi_shape_example();
+    bsp_spiffs_mount();
 
-    capi_lottie_example();
+    /* Initialize display */
+    bsp_display_new_with_handles(NULL, &lcd_panel);
+
+    bsp_display_backlight_on();
+
+    capi_shape_example(&lcd_panel);
+
+    vTaskDelay(pdMS_TO_TICKS(5000));
+
+    capi_lottie_example(&lcd_panel);
 }
 
-static void init_filesystem(void)
-{
-    esp_vfs_spiffs_conf_t conf = {
-        .base_path = "/lottie",
-        .partition_label = "lottie",
-        .max_files = 1,
-    };
-
-    ESP_ERROR_CHECK(esp_vfs_spiffs_register(&conf));
-
-    /* Get file name in storage */
-    struct dirent *p_dirent = NULL;
-    DIR *p_dir_stream = opendir("/lottie");
-
-    /* Scan files in storage */
-    while (true) {
-        p_dirent = readdir(p_dir_stream);
-        if (NULL != p_dirent) {
-            ESP_LOGI(TAG, "d_name:%s", p_dirent->d_name);
-        } else {
-            closedir(p_dir_stream);
-            break;
-        }
-    }
-}
-
-static void capi_shape_example(void)
+static void capi_shape_example(bsp_lcd_handles_t *lcd_panel)
 {
     ESP_LOGI(TAG, "capiShapes start");
 
-    uint32_t *lottile_cavas_888 = NULL;
+    uint32_t *cavas_buf_888 = NULL;
+    uint16_t *cavas_buf_565 = NULL;
 
-    lottile_cavas_888 = heap_caps_malloc(LOTTIE_SIZE_HOR * LOTTIE_SIZE_VER * sizeof(uint32_t), MALLOC_CAP_SPIRAM);
-    assert(lottile_cavas_888);
+    cavas_buf_888 = heap_caps_malloc(LOTTIE_SIZE_HOR * LOTTIE_SIZE_VER * sizeof(uint32_t), MALLOC_CAP_SPIRAM);
+    assert(cavas_buf_888);
+
+    cavas_buf_565 = heap_caps_malloc(LOTTIE_SIZE_HOR * LOTTIE_SIZE_VER * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    assert(cavas_buf_565);
 
     assert(tvg_engine_init(TVG_ENGINE_SW, 0) == TVG_RESULT_SUCCESS);
 
     Tvg_Canvas *canvas = tvg_swcanvas_create();
     assert(canvas);
 
-    assert(tvg_swcanvas_set_target(canvas, lottile_cavas_888, LOTTIE_SIZE_HOR, LOTTIE_SIZE_HOR, LOTTIE_SIZE_VER, TVG_COLORSPACE_ARGB8888) == TVG_RESULT_SUCCESS);
+    assert(tvg_swcanvas_set_target(canvas, cavas_buf_888, LOTTIE_SIZE_HOR, LOTTIE_SIZE_HOR, LOTTIE_SIZE_VER, TVG_COLORSPACE_ARGB8888) == TVG_RESULT_SUCCESS);
 
     Tvg_Paint *paint = tvg_shape_new();
     assert(paint);
@@ -84,24 +72,35 @@ static void capi_shape_example(void)
     assert(tvg_canvas_draw(canvas) == TVG_RESULT_SUCCESS);
     assert(tvg_canvas_sync(canvas) == TVG_RESULT_SUCCESS);
 
+    argb888_to_rgb565(cavas_buf_888, cavas_buf_565, LOTTIE_SIZE_HOR * LOTTIE_SIZE_VER);
+    esp_lcd_panel_draw_bitmap(lcd_panel->panel, 0, 0, LOTTIE_SIZE_HOR, LOTTIE_SIZE_VER, cavas_buf_565);
+
     assert(tvg_canvas_destroy(canvas) == TVG_RESULT_SUCCESS);
 
     assert(tvg_engine_term(TVG_ENGINE_SW) == TVG_RESULT_SUCCESS);
 
-    if (lottile_cavas_888) {
-        free(lottile_cavas_888);
+    if (cavas_buf_888) {
+        free(cavas_buf_888);
+    }
+
+    if (cavas_buf_565) {
+        free(cavas_buf_565);
     }
 }
 
-static void capi_lottie_example(void)
+static void capi_lottie_example(bsp_lcd_handles_t *lcd_panel)
 {
     ESP_LOGI(TAG, "capiLottie start");
 
-    char *src = "/lottie/lolo_walk.json";
-    uint32_t *lottile_cavas_888 = NULL;
+    char *src = "/spiffs/lolo_walk.json";
+    uint32_t *cavas_buf_888 = NULL;
+    uint16_t *cavas_buf_565 = NULL;
 
-    lottile_cavas_888 = heap_caps_malloc(LOTTIE_SIZE_HOR * LOTTIE_SIZE_VER * sizeof(uint32_t), MALLOC_CAP_SPIRAM);
-    assert(lottile_cavas_888);
+    cavas_buf_888 = heap_caps_malloc(LOTTIE_SIZE_HOR * LOTTIE_SIZE_VER * sizeof(uint32_t), MALLOC_CAP_SPIRAM);
+    assert(cavas_buf_888);
+
+    cavas_buf_565 = heap_caps_malloc(LOTTIE_SIZE_HOR * LOTTIE_SIZE_VER * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    assert(cavas_buf_565);
 
     assert(tvg_engine_init(TVG_ENGINE_SW, 0) == TVG_RESULT_SUCCESS);
 
@@ -118,7 +117,7 @@ static void capi_lottie_example(void)
     Tvg_Canvas *canvas = tvg_swcanvas_create();
     assert(canvas);
 
-    assert(tvg_swcanvas_set_target(canvas, lottile_cavas_888, LOTTIE_SIZE_HOR, LOTTIE_SIZE_HOR, LOTTIE_SIZE_VER, TVG_COLORSPACE_ARGB8888) == TVG_RESULT_SUCCESS);
+    assert(tvg_swcanvas_set_target(canvas, cavas_buf_888, LOTTIE_SIZE_HOR, LOTTIE_SIZE_HOR, LOTTIE_SIZE_VER, TVG_COLORSPACE_ARGB8888) == TVG_RESULT_SUCCESS);
     assert(tvg_canvas_push(canvas, picture) == TVG_RESULT_SUCCESS);
 
     float f_total;
@@ -136,6 +135,9 @@ static void capi_lottie_example(void)
         assert(tvg_canvas_draw(canvas) == TVG_RESULT_SUCCESS);
         assert(tvg_canvas_sync(canvas) == TVG_RESULT_SUCCESS);
 
+        argb888_to_rgb565(cavas_buf_888, cavas_buf_565, LOTTIE_SIZE_HOR * LOTTIE_SIZE_VER);
+        esp_lcd_panel_draw_bitmap(lcd_panel->panel, 0, 0, LOTTIE_SIZE_HOR, LOTTIE_SIZE_VER, cavas_buf_565);
+
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 
@@ -145,7 +147,27 @@ static void capi_lottie_example(void)
 
     assert(tvg_engine_term(TVG_ENGINE_SW) == TVG_RESULT_SUCCESS);
 
-    if (lottile_cavas_888) {
-        free(lottile_cavas_888);
+    if (cavas_buf_888) {
+        free(cavas_buf_888);
+    }
+
+    if (cavas_buf_565) {
+        free(cavas_buf_565);
+    }
+}
+
+static void argb888_to_rgb565(const uint32_t *argb888, uint16_t *rgb565, size_t size)
+{
+    for (size_t i = 0; i < size; ++i) {
+        uint32_t color = argb888[i];
+        uint8_t r = (color >> 16) & 0xFF;
+        uint8_t g = (color >> 8) & 0xFF;
+        uint8_t b = color & 0xFF;
+
+        uint16_t r_565 = (r >> 3) << 11;
+        uint16_t g_565 = (g >> 2) << 5;
+        uint16_t b_565 = b >> 3;
+
+        rgb565[i] = r_565 | g_565 | b_565;
     }
 }
