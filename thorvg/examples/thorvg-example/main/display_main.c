@@ -16,8 +16,8 @@
 static const char *TAG = "example";
 
 static void init_filesystem(void);
-static void capi_shape_example();
-static void capi_lottie_example();
+static void capi_shape_example(void);
+static void capi_lottie_example(void);
 
 #define LOTTIE_SIZE_HOR     300
 #define LOTTIE_SIZE_VER     300
@@ -57,7 +57,7 @@ static void init_filesystem(void)
     }
 }
 
-static void capi_shape_example()
+static void capi_shape_example(void)
 {
     ESP_LOGI(TAG, "capiShapes start");
 
@@ -93,7 +93,7 @@ static void capi_shape_example()
     }
 }
 
-static void capi_lottie_example()
+static void capi_lottie_example(void)
 {
     ESP_LOGI(TAG, "capiLottie start");
 

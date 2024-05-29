@@ -6,7 +6,11 @@ set(TVG_BUILD_DIR "${CMAKE_BINARY_DIR}/thorvg_build")
 set(TVG_CROSS_CFG "${CMAKE_BINARY_DIR}/thorvg_build/cross_file.txt")
 
 idf_component_register(SRCS dummy.c
-                       INCLUDE_DIRS "${TVG_INC_DIR}")
+                    INCLUDE_DIRS "${TVG_INC_DIR}")
+
+set_source_files_properties(
+        "${TVG_INC_DIR}/thorvg_capi.h"
+        PROPERTIES COMPILE_FLAGS "-Wno-strict-prototypes")
 
 include(ExternalProject)
 
@@ -61,15 +65,31 @@ strip = '${TOOLCHAIN_PREFIX}strip'
 
 [built-in options]
 cpp_args = ['-D_GNU_SOURCE','-D__linux__',${MESON_CXX_FLAGS}]
-# cpp_args = ['-D_GNU_SOURCE','-D__linux__']
-cpp_link_args = [${MESON_LINKER_FLAGS}]
+")
 
+if(NOT MESON_LINKER_FLAGS STREQUAL "''")
+    file(APPEND ${TVG_CROSS_CFG} "
+cpp_link_args = [${MESON_LINKER_FLAGS}]
+")
+endif()
+
+file(APPEND ${TVG_CROSS_CFG} "
 [host_machine]
 system = 'android'
 cpu_family = '${CMAKE_SYSTEM}'
 cpu = 'esp'
 endian = 'little'
 ")
+
+execute_process(
+    COMMAND pip install meson
+    RESULT_VARIABLE pip_result
+    OUTPUT_VARIABLE pip_output
+)
+
+if(NOT pip_result EQUAL 0)
+    message(FATAL_ERROR "Failed to execute 'python -c \"import meson; print(meson.__version__)\"'")
+endif()
 
 ExternalProject_Add(${TVG_LIB}_target
     PREFIX ${TVG_BUILD_DIR}
