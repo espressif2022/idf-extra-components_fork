@@ -8,10 +8,6 @@ set(TVG_CROSS_CFG "${CMAKE_BINARY_DIR}/thorvg_build/cross_file.txt")
 idf_component_register(SRCS dummy.c
                     INCLUDE_DIRS "${TVG_INC_DIR}")
 
-set_source_files_properties(
-        "${TVG_INC_DIR}/thorvg_capi.h"
-        PROPERTIES COMPILE_FLAGS "-Wno-strict-prototypes")
-
 include(ExternalProject)
 
 if(NOT CMAKE_CXX_FLAGS STREQUAL "")
