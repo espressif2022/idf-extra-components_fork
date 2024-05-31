@@ -4,6 +4,7 @@ set(TVG_INC_DIR thorvg/src/bindings/capi)
 set(TVG_SUBDIR "${CMAKE_CURRENT_SOURCE_DIR}/thorvg")
 set(TVG_BUILD_DIR "${CMAKE_BINARY_DIR}/thorvg_build")
 set(TVG_CROSS_CFG "${CMAKE_BINARY_DIR}/thorvg_build/cross_file.txt")
+idf_build_get_property(python PYTHON)
 
 idf_component_register(SRCS dummy.c
                     INCLUDE_DIRS "${TVG_INC_DIR}")

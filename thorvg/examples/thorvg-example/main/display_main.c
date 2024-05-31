@@ -10,22 +10,24 @@
 #include <dirent.h>
 #include "esp_log.h"
 #include "esp_err.h"
-#include "esp_spiffs.h"
+#include "esp_check.h"
+#include "esp_lcd_panel_ops.h"
 #include "bsp/esp-bsp.h"
+#include "driver/ppa.h"
 #include "thorvg_capi.h"
 
 static const char *TAG = "example";
 
-static void capi_shape_example(bsp_lcd_handles_t *lcd_panel);
-static void capi_lottie_example(bsp_lcd_handles_t *lcd_panel);
-static void argb888_to_rgb565(const uint32_t *argb888, uint16_t *rgb565, size_t size);
+static void capi_loop_task(void *arg);
+static esp_err_t capi_create_lottie(bsp_lcd_handles_t *lcd_panel);
+static esp_err_t argb888_to_rgb565_ppa(ppa_client_handle_t ppa_handle, const uint32_t *in, uint16_t *out);
 
-#define LOTTIE_SIZE_HOR     300
-#define LOTTIE_SIZE_VER     300
+#define LOTTIE_SIZE_HOR     320
+#define LOTTIE_SIZE_VER     320
 
 void app_main(void)
 {
-    bsp_lcd_handles_t lcd_panel;
+    static bsp_lcd_handles_t lcd_panel;
 
     bsp_spiffs_mount();
 
@@ -34,140 +36,186 @@ void app_main(void)
 
     bsp_display_backlight_on();
 
-    capi_shape_example(&lcd_panel);
-
-    vTaskDelay(pdMS_TO_TICKS(5000));
-
-    capi_lottie_example(&lcd_panel);
-}
-
-static void capi_shape_example(bsp_lcd_handles_t *lcd_panel)
-{
-    ESP_LOGI(TAG, "capiShapes start");
-
-    uint32_t *cavas_buf_888 = NULL;
-    uint16_t *cavas_buf_565 = NULL;
-
-    cavas_buf_888 = heap_caps_malloc(LOTTIE_SIZE_HOR * LOTTIE_SIZE_VER * sizeof(uint32_t), MALLOC_CAP_SPIRAM);
-    assert(cavas_buf_888);
-
-    cavas_buf_565 = heap_caps_malloc(LOTTIE_SIZE_HOR * LOTTIE_SIZE_VER * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
-    assert(cavas_buf_565);
-
-    assert(tvg_engine_init(TVG_ENGINE_SW, 0) == TVG_RESULT_SUCCESS);
-
-    Tvg_Canvas *canvas = tvg_swcanvas_create();
-    assert(canvas);
-
-    assert(tvg_swcanvas_set_target(canvas, cavas_buf_888, LOTTIE_SIZE_HOR, LOTTIE_SIZE_HOR, LOTTIE_SIZE_VER, TVG_COLORSPACE_ARGB8888) == TVG_RESULT_SUCCESS);
-
-    Tvg_Paint *paint = tvg_shape_new();
-    assert(paint);
-
-    assert(tvg_shape_append_rect(paint, 0, 0, LOTTIE_SIZE_HOR, LOTTIE_SIZE_HOR, 0, 0) == TVG_RESULT_SUCCESS);
-    assert(tvg_shape_set_fill_color(paint, 255, 0, 0, 255) == TVG_RESULT_SUCCESS);
-
-    assert(tvg_canvas_push(canvas, paint) == TVG_RESULT_SUCCESS);
-
-    assert(tvg_canvas_draw(canvas) == TVG_RESULT_SUCCESS);
-    assert(tvg_canvas_sync(canvas) == TVG_RESULT_SUCCESS);
-
-    argb888_to_rgb565(cavas_buf_888, cavas_buf_565, LOTTIE_SIZE_HOR * LOTTIE_SIZE_VER);
-    esp_lcd_panel_draw_bitmap(lcd_panel->panel, 0, 0, LOTTIE_SIZE_HOR, LOTTIE_SIZE_VER, cavas_buf_565);
-
-    assert(tvg_canvas_destroy(canvas) == TVG_RESULT_SUCCESS);
-
-    assert(tvg_engine_term(TVG_ENGINE_SW) == TVG_RESULT_SUCCESS);
-
-    if (cavas_buf_888) {
-        free(cavas_buf_888);
-    }
-
-    if (cavas_buf_565) {
-        free(cavas_buf_565);
+    BaseType_t res = xTaskCreate(capi_loop_task, "thorvg task", 60 * 1024, (void *)&lcd_panel, 5, NULL);
+    if (res != pdPASS) {
+        ESP_LOGE(TAG, "Create thorvg task fail!");
     }
 }
 
-static void capi_lottie_example(bsp_lcd_handles_t *lcd_panel)
+void capi_loop_task(void *arg)
 {
-    ESP_LOGI(TAG, "capiLottie start");
+    bsp_lcd_handles_t *lcd_panel = (bsp_lcd_handles_t *)arg;
+
+    while (1) {
+        capi_create_lottie(lcd_panel);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+
+    vTaskDelete(NULL);
+}
+
+static esp_err_t capi_create_lottie(bsp_lcd_handles_t *lcd_panel)
+{
+    esp_err_t ret = ESP_OK;
+    Tvg_Result tvg_res = TVG_RESULT_SUCCESS;
+    Tvg_Result tvg_engine = TVG_RESULT_INSUFFICIENT_CONDITION;
+
+    static uint32_t reac_color = 0x00;
 
     char *src = "/spiffs/lolo_walk.json";
-    uint32_t *cavas_buf_888 = NULL;
-    uint16_t *cavas_buf_565 = NULL;
 
-    cavas_buf_888 = heap_caps_malloc(LOTTIE_SIZE_HOR * LOTTIE_SIZE_VER * sizeof(uint32_t), MALLOC_CAP_SPIRAM);
-    assert(cavas_buf_888);
+    uint32_t *canvas_buf_888 = NULL;
+    uint16_t *canvas_buf_565 = NULL;
+    ppa_client_handle_t ppa_handle = NULL;
 
-    cavas_buf_565 = heap_caps_malloc(LOTTIE_SIZE_HOR * LOTTIE_SIZE_VER * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
-    assert(cavas_buf_565);
+    Tvg_Animation *animation = NULL;
+    Tvg_Canvas *canvas = NULL;
 
-    assert(tvg_engine_init(TVG_ENGINE_SW, 0) == TVG_RESULT_SUCCESS);
+    canvas_buf_888 = heap_caps_aligned_calloc(64, LOTTIE_SIZE_HOR * LOTTIE_SIZE_VER * sizeof(uint32_t), sizeof(uint8_t), MALLOC_CAP_SPIRAM);
+    ESP_GOTO_ON_FALSE(canvas_buf_888, ESP_ERR_NO_MEM, err, TAG, "Error malloc canvas buffer");
 
-    Tvg_Animation *animation = tvg_animation_new();
-    assert(animation);
+    canvas_buf_565 = heap_caps_aligned_calloc(64, LOTTIE_SIZE_HOR * LOTTIE_SIZE_VER * sizeof(uint16_t), sizeof(uint8_t), MALLOC_CAP_SPIRAM);
+    ESP_GOTO_ON_FALSE(canvas_buf_565, ESP_ERR_NO_MEM, err, TAG, "Error malloc canvas buffer");
+
+    ppa_client_config_t ppa_client_config = {
+        .oper_type = PPA_OPERATION_SRM,
+    };
+    ESP_GOTO_ON_FALSE((ESP_OK == ppa_register_client(&ppa_client_config, &ppa_handle)), ESP_ERR_INVALID_STATE, err, TAG, "ppa_register_client failed");
+
+    tvg_engine = tvg_engine_init(TVG_ENGINE_SW, 0);
+    ESP_GOTO_ON_FALSE(tvg_engine == TVG_RESULT_SUCCESS, ESP_ERR_INVALID_STATE, err, TAG, "tvg_engine_init failed");
+
+    canvas = tvg_swcanvas_create();
+    ESP_GOTO_ON_FALSE(tvg_res == TVG_RESULT_SUCCESS, ESP_ERR_INVALID_STATE, err, TAG, "tvg_engine_init failed");
+
+    tvg_res = tvg_swcanvas_set_target(canvas, canvas_buf_888, LOTTIE_SIZE_HOR, LOTTIE_SIZE_HOR, LOTTIE_SIZE_VER, TVG_COLORSPACE_ARGB8888);
+    ESP_GOTO_ON_FALSE(tvg_res == TVG_RESULT_SUCCESS, ESP_ERR_INVALID_STATE, err, TAG, "tvg_engine_init failed");
+
+    /* shape rect */
+    Tvg_Paint *paint = tvg_shape_new();
+    ESP_GOTO_ON_FALSE(paint, ESP_ERR_INVALID_STATE, err, TAG, "tvg_shape_new failed");
+
+    tvg_res = tvg_shape_append_rect(paint, 0, 0, LOTTIE_SIZE_HOR, LOTTIE_SIZE_HOR, 0, 0);
+    ESP_GOTO_ON_FALSE(tvg_res == TVG_RESULT_SUCCESS, ESP_ERR_INVALID_STATE, err, TAG, "tvg_shape_append_rect failed");
+
+    reac_color++;
+    if (reac_color % 2) {
+        tvg_res = tvg_shape_set_fill_color(paint, 255, 0, 0, 255);
+    } else {
+        tvg_res = tvg_shape_set_fill_color(paint, 0, 255, 0, 255);
+    }
+    ESP_GOTO_ON_FALSE(tvg_res == TVG_RESULT_SUCCESS, ESP_ERR_INVALID_STATE, err, TAG, "tvg_shape_set_fill_color failed");
+
+    tvg_res = tvg_canvas_push(canvas, paint);
+    ESP_GOTO_ON_FALSE(tvg_res == TVG_RESULT_SUCCESS, ESP_ERR_INVALID_STATE, err, TAG, "tvg_canvas_push failed");
+
+    tvg_res = tvg_canvas_draw(canvas);
+    ESP_GOTO_ON_FALSE(tvg_res == TVG_RESULT_SUCCESS, ESP_ERR_INVALID_STATE, err, TAG, "tvg_canvas_draw failed");
+
+    tvg_res = tvg_canvas_sync(canvas);
+    ESP_GOTO_ON_FALSE(tvg_res == TVG_RESULT_SUCCESS, ESP_ERR_INVALID_STATE, err, TAG, "tvg_canvas_sync failed");
+
+    argb888_to_rgb565_ppa(ppa_handle, canvas_buf_888, canvas_buf_565);
+    esp_lcd_panel_draw_bitmap(lcd_panel->panel, 0, 0, LOTTIE_SIZE_HOR, LOTTIE_SIZE_VER, canvas_buf_565);
+
+    /* tvg Lottie */
+    animation = tvg_animation_new();
+    ESP_GOTO_ON_FALSE(animation, ESP_ERR_INVALID_STATE, err, TAG, "tvg_engine_init failed");
 
     Tvg_Paint *picture = tvg_animation_get_picture(animation);
-    assert(picture);
+    ESP_GOTO_ON_FALSE(tvg_res == TVG_RESULT_SUCCESS, ESP_ERR_INVALID_STATE, err, TAG, "tvg_engine_init failed");
 
-    assert(tvg_picture_load(picture, src) == TVG_RESULT_SUCCESS);
+    tvg_res = tvg_picture_load(picture, src);
+    ESP_GOTO_ON_FALSE(picture, ESP_ERR_INVALID_STATE, err, TAG, "tvg_engine_init failed");
 
-    assert(tvg_picture_set_size(picture, LOTTIE_SIZE_HOR, LOTTIE_SIZE_VER) == TVG_RESULT_SUCCESS);
+    tvg_res = tvg_picture_set_size(picture, LOTTIE_SIZE_HOR, LOTTIE_SIZE_VER);
+    ESP_GOTO_ON_FALSE(tvg_res == TVG_RESULT_SUCCESS, ESP_ERR_INVALID_STATE, err, TAG, "tvg_engine_init failed");
 
-    Tvg_Canvas *canvas = tvg_swcanvas_create();
-    assert(canvas);
-
-    assert(tvg_swcanvas_set_target(canvas, cavas_buf_888, LOTTIE_SIZE_HOR, LOTTIE_SIZE_HOR, LOTTIE_SIZE_VER, TVG_COLORSPACE_ARGB8888) == TVG_RESULT_SUCCESS);
-    assert(tvg_canvas_push(canvas, picture) == TVG_RESULT_SUCCESS);
+    tvg_res = tvg_canvas_push(canvas, picture);
+    ESP_GOTO_ON_FALSE(tvg_res == TVG_RESULT_SUCCESS, ESP_ERR_INVALID_STATE, err, TAG, "tvg_engine_init failed");
 
     float f_total;
     float f = 0;
-    assert(tvg_animation_get_total_frame(animation, &f_total) == TVG_RESULT_SUCCESS);
-    assert(f_total != 0.0f);
+    tvg_res = tvg_animation_get_total_frame(animation, &f_total);
+    ESP_GOTO_ON_FALSE(tvg_res == TVG_RESULT_SUCCESS, ESP_ERR_INVALID_STATE, err, TAG, "tvg_engine_init failed");
+    ESP_GOTO_ON_FALSE((f_total != 0.0f), ESP_ERR_INVALID_STATE, err, TAG, "tvg_engine_init failed");
 
     while (f < f_total) {
-        assert(tvg_animation_get_frame(animation, &f) == TVG_RESULT_SUCCESS);
+        tvg_res = tvg_animation_get_frame(animation, &f);
         f++;
         ESP_LOGI(TAG, "set %f / %f", f, f_total);
-        assert(tvg_animation_set_frame(animation, f) == TVG_RESULT_SUCCESS);
-        assert(tvg_canvas_update(canvas) == TVG_RESULT_SUCCESS);
+        tvg_res = tvg_animation_set_frame(animation, f);
+        ESP_GOTO_ON_FALSE(tvg_res == TVG_RESULT_SUCCESS, ESP_ERR_INVALID_STATE, err, TAG, "tvg_animation_set_frame failed");
 
-        assert(tvg_canvas_draw(canvas) == TVG_RESULT_SUCCESS);
-        assert(tvg_canvas_sync(canvas) == TVG_RESULT_SUCCESS);
+        tvg_res = tvg_canvas_update(canvas);
+        ESP_GOTO_ON_FALSE(tvg_res == TVG_RESULT_SUCCESS, ESP_ERR_INVALID_STATE, err, TAG, "tvg_canvas_update failed");
 
-        argb888_to_rgb565(cavas_buf_888, cavas_buf_565, LOTTIE_SIZE_HOR * LOTTIE_SIZE_VER);
-        esp_lcd_panel_draw_bitmap(lcd_panel->panel, 0, 0, LOTTIE_SIZE_HOR, LOTTIE_SIZE_VER, cavas_buf_565);
+        tvg_res = tvg_canvas_draw(canvas);
+        ESP_GOTO_ON_FALSE(tvg_res == TVG_RESULT_SUCCESS, ESP_ERR_INVALID_STATE, err, TAG, "tvg_canvas_draw failed");
+
+        tvg_res = tvg_canvas_sync(canvas);
+        ESP_GOTO_ON_FALSE(tvg_res == TVG_RESULT_SUCCESS, ESP_ERR_INVALID_STATE, err, TAG, "tvg_canvas_sync failed");
+
+        argb888_to_rgb565_ppa(ppa_handle, canvas_buf_888, canvas_buf_565);
+        esp_lcd_panel_draw_bitmap(lcd_panel->panel, 0, 0, LOTTIE_SIZE_HOR, LOTTIE_SIZE_VER, canvas_buf_565);
 
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 
-    assert(tvg_animation_del(animation) == TVG_RESULT_SUCCESS);
-
-    assert(tvg_canvas_destroy(canvas) == TVG_RESULT_SUCCESS);
-
-    assert(tvg_engine_term(TVG_ENGINE_SW) == TVG_RESULT_SUCCESS);
-
-    if (cavas_buf_888) {
-        free(cavas_buf_888);
+err:
+    if (animation) {
+        tvg_animation_del(animation);
+    }
+    if (canvas) {
+        tvg_canvas_destroy(canvas);
+    }
+    if (TVG_RESULT_SUCCESS == tvg_engine) {
+        tvg_engine_term(TVG_ENGINE_SW);
     }
 
-    if (cavas_buf_565) {
-        free(cavas_buf_565);
+    if (canvas_buf_888) {
+        free(canvas_buf_888);
     }
+    if (canvas_buf_565) {
+        free(canvas_buf_565);
+    }
+    if (ppa_handle) {
+        ppa_unregister_client(ppa_handle);
+    }
+
+    return ret;
 }
 
-static void argb888_to_rgb565(const uint32_t *argb888, uint16_t *rgb565, size_t size)
+static esp_err_t argb888_to_rgb565_ppa(ppa_client_handle_t ppa_handle, const uint32_t *in, uint16_t *out)
 {
-    for (size_t i = 0; i < size; ++i) {
-        uint32_t color = argb888[i];
-        uint8_t r = (color >> 16) & 0xFF;
-        uint8_t g = (color >> 8) & 0xFF;
-        uint8_t b = color & 0xFF;
+    ppa_srm_oper_config_t oper_config = {
+        .in.buffer = in,
+        .in.pic_w = LOTTIE_SIZE_HOR,
+        .in.pic_h = LOTTIE_SIZE_VER,
+        .in.block_w = LOTTIE_SIZE_HOR,
+        .in.block_h = LOTTIE_SIZE_VER,
+        .in.block_offset_x = 0,
+        .in.block_offset_y = 0,
+        .in.srm_cm = PPA_SRM_COLOR_MODE_ARGB8888,
 
-        uint16_t r_565 = (r >> 3) << 11;
-        uint16_t g_565 = (g >> 2) << 5;
-        uint16_t b_565 = b >> 3;
+        .out.buffer = out,
+        .out.buffer_size = LOTTIE_SIZE_HOR * LOTTIE_SIZE_VER * sizeof(uint16_t),
+            .out.pic_w = LOTTIE_SIZE_HOR,
+            .out.pic_h = LOTTIE_SIZE_VER,
+            .out.block_offset_x = 0,
+            .out.block_offset_y = 0,
+            .out.srm_cm = PPA_SRM_COLOR_MODE_RGB565,
 
-        rgb565[i] = r_565 | g_565 | b_565;
-    }
+            .rotation_angle = PPA_SRM_ROTATION_ANGLE_0,
+            .scale_x = 1.0,
+            .scale_y = 1.0,
+
+            .rgb_swap = 0,
+            .byte_swap = 0,
+            .mode = PPA_TRANS_MODE_BLOCKING,
+    };
+
+    ESP_ERROR_CHECK(ppa_do_scale_rotate_mirror(ppa_handle, &oper_config));
+
+    return ESP_OK;
 }
