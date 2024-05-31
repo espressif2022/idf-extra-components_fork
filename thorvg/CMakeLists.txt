@@ -78,7 +78,7 @@ endian = 'little'
 ")
 
 execute_process(
-    COMMAND pip install meson
+    COMMAND ${python} -m pip install -U meson
     RESULT_VARIABLE pip_result
     OUTPUT_VARIABLE pip_output
 )
