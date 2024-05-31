@@ -1,4 +1,4 @@
-# thorvg component
+# ThorVG component
 
 [![Component Registry](https://components.espressif.com/components/espressif/thorvg/badge.svg)](https://components.espressif.com/components/espressif/thorvg)
 
