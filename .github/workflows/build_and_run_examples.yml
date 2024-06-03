@@ -1,10 +1,12 @@
 name: Build and Run Examples
 
+# on:
+#   schedule:
+#     - cron: '0 0 * * *' # Once per day at midnight
+#   pull_request:
+#     types: [opened, reopened, synchronize]
 on:
-  schedule:
-    - cron: '0 0 * * *' # Once per day at midnight
-  pull_request:
-    types: [opened, reopened, synchronize]
+    push:
 
 jobs:
   build:
