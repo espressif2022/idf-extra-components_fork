@@ -65,3 +65,7 @@
 [submodule "thorvg/thorvg"]
 	path = thorvg/thorvg
 	url = https://github.com/thorvg/thorvg
+
+[submodule "tinygl/tinygl"]
+	path = tinygl/tinygl
+	url = https://github.com/ska80/tinygl.git
