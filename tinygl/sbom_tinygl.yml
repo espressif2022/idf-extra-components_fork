@@ -1,0 +1,7 @@
+name: tinygl
+version: 2.13.0
+cpe: cpe:2.3:a:tinygl:tinygl:{}:*:*:*:*:*:*:*
+supplier: 'Organization: tinygl <https://www.tinygl.org>'
+description: FreeType is a software font engine
+url: https://github.com/ska80/tinygl
+hash: f42881c53401c49879f33690d61e5edced67cdbb
